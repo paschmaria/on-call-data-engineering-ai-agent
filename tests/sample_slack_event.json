@@ -1,0 +1,18 @@
+{
+  "token": "test-token",
+  "team_id": "T123456",
+  "api_app_id": "A123456",
+  "event": {
+    "type": "message",
+    "channel": "C1234567890",
+    "user": "U123456",
+    "text": "❌ Task has failed.\nDAG: test_analytics_pipeline\nTask: process_daily_metrics\nExecution Time: 2024-01-15 03:00:00+00:00\nException: airflow.exceptions.AirflowSensorTimeout: Sensor has timed out; run duration of 3652.5 seconds exceeds the specified timeout of 3600.0.\nLog URL: [https://test-env.us-east-1.airflow.amazonaws.com/log?dag_id=test_analytics_pipeline&task_id=process_daily_metrics&execution_date=2024-01-15T03:00:00]",
+    "ts": "1705291200.123456",
+    "event_ts": "1705291200.123456",
+    "username": "Apache Airflow",
+    "bot_id": "B987654321"
+  },
+  "type": "event_callback",
+  "event_id": "Ev123456",
+  "event_time": 1705291200
+}

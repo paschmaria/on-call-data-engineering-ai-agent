@@ -1,0 +1,13 @@
+{
+  "channel": "C1234567890",
+  "thread_ts": "1705291200.123456",
+  "message_ts": "1705291200.123456",
+  "raw_message": "❌ Task has failed.\nDAG: prod-dbt-providers-v1.0\nTask: run_dim_providers.dim_providers.run\nExecution Time: 2024-01-15 04:00:00+00:00\nException: cosmos.exceptions.CosmosDbtRunError: dbt invocation completed with errors: Database Error in model dim_providers (models/core/dim_providers.sql)\n  16:00:03  column \"provider_category\" does not exist\n  16:00:03  LINE 15:     provider_category,\nLog URL: [https://prod-env.us-east-1.airflow.amazonaws.com/log?dag_id=prod-dbt-providers-v1.0&task_id=run_dim_providers.dim_providers.run&execution_date=2024-01-15T04:00:00]",
+  "parsed_data": {
+    "dag_id": "prod-dbt-providers-v1.0",
+    "task_id": "run_dim_providers.dim_providers.run",
+    "execution_time": "2024-01-15 04:00:00+00:00",
+    "exception": "cosmos.exceptions.CosmosDbtRunError: dbt invocation completed with errors: Database Error in model dim_providers (models/core/dim_providers.sql)\n  16:00:03  column \"provider_category\" does not exist\n  16:00:03  LINE 15:     provider_category,",
+    "log_url": "https://prod-env.us-east-1.airflow.amazonaws.com/log?dag_id=prod-dbt-providers-v1.0&task_id=run_dim_providers.dim_providers.run&execution_date=2024-01-15T04:00:00"
+  }
+}
