@@ -43,7 +43,7 @@ A serverless AI agent that monitors Slack for Apache Airflow failures, diagnoses
 - Slack workspace with admin access
 - Python 3.11+
 - AWS CLI configured
-- SAM CLI or Serverless Framework
+- Terraform >= 1.0
 
 ### Installation
 
@@ -60,10 +60,16 @@ pip install -r requirements.txt
 
 3. Configure AWS Secrets Manager with required credentials (see `docs/SETUP.md`)
 
-4. Deploy using SAM:
+4. Deploy using Terraform:
 ```bash
-sam build
-sam deploy --guided
+# Make deployment script executable
+chmod +x deployment/deploy.sh
+
+# Deploy to development environment
+./deployment/deploy.sh deploy dev
+
+# Or deploy to production
+./deployment/deploy.sh deploy prod
 ```
 
 ## 📁 Project Structure
@@ -72,25 +78,33 @@ sam deploy --guided
 ├── src/
 │   ├── app.py                 # Slack listener
 │   ├── lambda_handler.py      # Main Lambda function
-│   ├── tools.py              # AWS diagnostic tools
-│   └── runtime_prompt.py     # LLM prompt template
+│   ├── tools.py               # AWS diagnostic tools
+│   ├── parser.py              # Message parsing logic
+│   ├── orchestrator.py        # Workflow coordination
+│   ├── prompt_engine.py       # LLM interactions
+│   └── runtime_prompt.py      # LLM prompt template
 ├── tests/
-│   ├── test_tools.py
-│   └── test_lambda_handler.py
+│   ├── test_tools.py          # AWS tools unit tests
+│   └── test_lambda_handler.py # Lambda handler tests
 ├── docs/
-│   ├── SETUP.md              # Detailed setup guide
-│   ├── ARCHITECTURE.md       # Architecture decisions
-│   └── DEVELOPMENT_PLAN.md   # Step-by-step development guide
+│   ├── SETUP.md               # Detailed setup guide
+│   ├── ARCHITECTURE.md        # Architecture decisions
+│   └── DEVELOPMENT_PLAN.md    # Step-by-step development guide
 ├── deployment/
-│   ├── template.yaml         # SAM template
-│   └── iam_policy.json       # Required IAM permissions
+│   ├── README.md              # Deployment documentation
+│   ├── deploy.sh              # Deployment script
+│   └── slack_manifest.yaml    # Slack app configuration
+├── terraform/
+│   ├── main.tf                # Main Terraform configuration
+│   ├── variables.tf           # Variable definitions
+│   └── outputs.tf             # Output definitions
 ├── requirements.txt
 └── README.md
 ```
 
 ## 🔧 Configuration
 
-The agent requires the following environment variables:
+The agent requires the following environment variables (managed through Terraform):
 
 - `SLACK_BOT_TOKEN`: Bot user OAuth token
 - `SLACK_SIGNING_SECRET`: For request verification
@@ -116,6 +130,50 @@ python src/app.py  # Starts local Slack listener
 The agent creates CloudWatch logs and metrics:
 - `/aws/lambda/de-agent`: Function logs
 - `DE-Agent/Diagnostics`: Custom metrics for response times and error rates
+
+## 🚀 Deployment
+
+### Development Environment
+```bash
+./deployment/deploy.sh deploy dev
+```
+
+### Production Environment
+```bash
+./deployment/deploy.sh deploy prod
+```
+
+### Other Commands
+```bash
+# Set up secrets
+./deployment/deploy.sh secrets dev
+
+# Validate deployment
+./deployment/deploy.sh validate dev
+
+# Package Lambda function only
+./deployment/deploy.sh package
+
+# Clean up infrastructure
+./deployment/deploy.sh cleanup dev
+```
+
+## 🔒 Security
+
+- All sensitive data stored in AWS Secrets Manager
+- IAM policies follow principle of least privilege
+- Slack webhook signature verification enabled
+- API Gateway uses HTTPS only
+- Lambda functions can run in VPC (optional)
+
+## 💰 Cost Optimization
+
+**Monthly Cost Estimates (1000 failures/month):**
+- Lambda: ~$2.50
+- API Gateway: ~$1.00
+- CloudWatch: ~$5.00
+- Secrets Manager: ~$2.00
+- **Total: ~$10.50/month**
 
 ## 🤝 Contributing
 
