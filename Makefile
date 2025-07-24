@@ -1,4 +1,4 @@
-.PHONY: help install install-dev test test-cov lint format type-check clean build deploy
+.PHONY: help install install-dev test test-cov lint format type-check clean build deploy tf-init tf-plan tf-apply tf-destroy
 
 # Default target
 .DEFAULT_GOAL := help
@@ -6,19 +6,24 @@
 # Python interpreter
 PYTHON := python3
 
+# Terraform command
+TERRAFORM := terraform
+
 # Help target
 help:
 	@echo "Available commands:"
-	@echo "  install      Install production dependencies"
-	@echo "  install-dev  Install development dependencies"
-	@echo "  test         Run tests"
-	@echo "  test-cov     Run tests with coverage"
-	@echo "  lint         Run linting"
-	@echo "  format       Format code"
-	@echo "  type-check   Run type checking"
-	@echo "  clean        Clean build artifacts"
-	@echo "  build        Build SAM application"
-	@echo "  deploy       Deploy to AWS"
+	@echo "  install       Install production dependencies"
+	@echo "  install-dev   Install development dependencies"
+	@echo "  test          Run tests"
+	@echo "  test-cov      Run tests with coverage"
+	@echo "  lint          Run linting"
+	@echo "  format        Format code"
+	@echo "  type-check    Run type checking"
+	@echo "  clean         Clean build artifacts"
+	@echo "  tf-init       Initialize Terraform"
+	@echo "  tf-plan       Plan Terraform deployment"
+	@echo "  tf-apply      Apply Terraform configuration"
+	@echo "  tf-destroy    Destroy Terraform resources"
 
 # Install production dependencies
 install:
@@ -64,19 +69,56 @@ clean:
 	rm -rf dist/
 	rm -rf build/
 	rm -rf *.egg-info
-	rm -rf .aws-sam/
+	rm -rf .terraform/
+	rm -f terraform/*.zip
 
-# Build SAM application
-build:
-	cd deployment && sam build
+# Terraform commands
+TF_DIR := terraform
 
-# Deploy to test environment
-deploy-test: build
-	cd deployment && sam deploy --config-env test
+# Initialize Terraform
+tf-init:
+	cd $(TF_DIR) && $(TERRAFORM) init
 
-# Deploy to production environment
-deploy-prod: build
-	cd deployment && sam deploy --config-env prod
+# Format Terraform files
+tf-fmt:
+	cd $(TF_DIR) && $(TERRAFORM) fmt -recursive
+
+# Validate Terraform configuration
+tf-validate:
+	cd $(TF_DIR) && $(TERRAFORM) validate
+
+# Plan Terraform deployment
+tf-plan: tf-fmt tf-validate
+	cd $(TF_DIR) && $(TERRAFORM) plan
+
+# Apply Terraform configuration
+tf-apply: tf-fmt tf-validate
+	cd $(TF_DIR) && $(TERRAFORM) apply
+
+# Apply Terraform configuration with auto-approve (use with caution)
+tf-apply-auto: tf-fmt tf-validate
+	cd $(TF_DIR) && $(TERRAFORM) apply -auto-approve
+
+# Destroy Terraform resources
+tf-destroy:
+	cd $(TF_DIR) && $(TERRAFORM) destroy
+
+# Show Terraform outputs
+tf-output:
+	cd $(TF_DIR) && $(TERRAFORM) output
+
+# Deploy to specific environment
+deploy-dev: tf-init
+	cd $(TF_DIR) && $(TERRAFORM) workspace select dev || $(TERRAFORM) workspace new dev
+	cd $(TF_DIR) && $(TERRAFORM) apply -var="environment=dev"
+
+deploy-test: tf-init
+	cd $(TF_DIR) && $(TERRAFORM) workspace select test || $(TERRAFORM) workspace new test
+	cd $(TF_DIR) && $(TERRAFORM) apply -var="environment=test"
+
+deploy-prod: tf-init
+	cd $(TF_DIR) && $(TERRAFORM) workspace select prod || $(TERRAFORM) workspace new prod
+	cd $(TF_DIR) && $(TERRAFORM) apply -var="environment=prod"
 
 # Run all checks before commit
 check: format lint type-check test
