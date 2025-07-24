@@ -1,0 +1,46 @@
+display_information:
+  name: DE-Bot
+  description: On-call Data Engineering AI Agent for diagnosing Airflow failures
+  background_color: "#2C3E50"
+  long_description: |
+    DE-Bot is an intelligent assistant that monitors Apache Airflow failure notifications
+    and provides automated root cause analysis by gathering diagnostic information from
+    MWAA, Redshift, CloudWatch, and other AWS services.
+
+features:
+  app_home:
+    home_tab_enabled: true
+    messages_tab_enabled: true
+    messages_tab_read_only_enabled: false
+  bot_user:
+    display_name: DE-Bot
+    always_online: true
+
+oauth_config:
+  scopes:
+    bot:
+      - channels:history
+      - channels:read
+      - chat:write
+      - chat:write.public
+      - reactions:write
+      - reactions:read
+      - app_mentions:read
+      - im:history
+      - groups:history
+      - mpim:history
+
+settings:
+  event_subscriptions:
+    request_url: https://your-api-gateway-url.execute-api.region.amazonaws.com/prod/slack/events
+    bot_events:
+      - message.channels
+      - message.groups
+      - message.im
+      - message.mpim
+      - app_mention
+  interactivity:
+    is_enabled: false
+  org_deploy_enabled: false
+  socket_mode_enabled: false
+  token_rotation_enabled: false

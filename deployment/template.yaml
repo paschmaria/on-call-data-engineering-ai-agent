@@ -1,0 +1,230 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: 'On-call Data Engineering AI Agent - Serverless application for diagnosing Airflow failures'
+
+Globals:
+  Function:
+    Timeout: 300
+    MemorySize: 1024
+    Runtime: python3.11
+    Environment:
+      Variables:
+        LOG_LEVEL: INFO
+
+Parameters:
+  EnvironmentName:
+    Type: String
+    Default: dev
+    AllowedValues:
+      - dev
+      - test
+      - prod
+    Description: Environment name for deployment
+  
+  MWAAEnvironmentName:
+    Type: String
+    Description: Name of the MWAA environment to monitor
+  
+  RedshiftClusterId:
+    Type: String
+    Description: Redshift cluster identifier
+  
+  SlackChannelId:
+    Type: String
+    Description: Slack channel ID to monitor
+
+Resources:
+  # API Gateway for Slack Events
+  DEAgentApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      Name: !Sub 'de-agent-api-${EnvironmentName}'
+      StageName: !Ref EnvironmentName
+      Cors:
+        AllowOrigin: "'https://slack.com'"
+        AllowHeaders: "'Content-Type,X-Slack-Signature,X-Slack-Request-Timestamp'"
+        AllowMethods: "'POST'"
+      Auth:
+        DefaultAuthorizer: NONE
+      DefinitionBody:
+        openapi: '3.0.1'
+        info:
+          title: DE Agent API
+          version: '1.0'
+        paths:
+          /slack/events:
+            post:
+              responses:
+                '200':
+                  description: Success
+              x-amazon-apigateway-integration:
+                uri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${SlackListenerFunction.Arn}/invocations'
+                httpMethod: POST
+                type: aws_proxy
+
+  # Lambda Function for Slack Event Listener
+  SlackListenerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub 'de-agent-slack-listener-${EnvironmentName}'
+      CodeUri: ../src/
+      Handler: app.lambda_handler
+      Description: Listens for Slack events and triggers diagnostics
+      Environment:
+        Variables:
+          DIAGNOSTIC_LAMBDA_NAME: !Ref DiagnosticFunction
+          ENVIRONMENT_NAME: !Ref EnvironmentName
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - secretsmanager:GetSecretValue
+              Resource:
+                - !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:de-agent/*'
+            - Effect: Allow
+              Action:
+                - lambda:InvokeFunction
+              Resource:
+                - !GetAtt DiagnosticFunction.Arn
+      Events:
+        SlackEvents:
+          Type: Api
+          Properties:
+            RestApiId: !Ref DEAgentApi
+            Path: /slack/events
+            Method: POST
+
+  # Lambda Function for Diagnostic Processing
+  DiagnosticFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub 'de-agent-diagnostic-${EnvironmentName}'
+      CodeUri: ../src/
+      Handler: lambda_handler.lambda_handler
+      Description: Performs diagnostic analysis on Airflow failures
+      ReservedConcurrentExecutions: 100
+      Environment:
+        Variables:
+          MWAA_ENVIRONMENT_NAME: !Ref MWAAEnvironmentName
+          REDSHIFT_CLUSTER_ID: !Ref RedshiftClusterId
+          ENVIRONMENT_NAME: !Ref EnvironmentName
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            # Secrets Manager access
+            - Effect: Allow
+              Action:
+                - secretsmanager:GetSecretValue
+              Resource:
+                - !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:de-agent/*'
+            
+            # MWAA access
+            - Effect: Allow
+              Action:
+                - airflow:GetEnvironment
+                - airflow:CreateCliToken
+                - airflow:CreateWebLoginToken
+              Resource:
+                - !Sub 'arn:aws:airflow:${AWS::Region}:${AWS::AccountId}:environment/${MWAAEnvironmentName}'
+            
+            # Redshift Data API access
+            - Effect: Allow
+              Action:
+                - redshift-data:ExecuteStatement
+                - redshift-data:DescribeStatement
+                - redshift-data:GetStatementResult
+              Resource: '*'
+            
+            # CloudWatch Logs access
+            - Effect: Allow
+              Action:
+                - logs:StartQuery
+                - logs:GetQueryResults
+                - logs:DescribeLogGroups
+                - logs:DescribeLogStreams
+                - logs:GetLogEvents
+              Resource:
+                - !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*'
+            
+            # CloudWatch Metrics
+            - Effect: Allow
+              Action:
+                - cloudwatch:PutMetricData
+              Resource: '*'
+              Condition:
+                StringEquals:
+                  cloudwatch:namespace: 'DE-Agent'
+
+  # Dead Letter Queue for failed processing
+  DiagnosticDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub 'de-agent-dlq-${EnvironmentName}'
+      MessageRetentionPeriod: 1209600  # 14 days
+      VisibilityTimeout: 300
+
+  # CloudWatch Log Groups
+  SlackListenerLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${SlackListenerFunction}'
+      RetentionInDays: 30
+
+  DiagnosticLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${DiagnosticFunction}'
+      RetentionInDays: 30
+
+  # CloudWatch Alarms
+  DiagnosticErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'de-agent-diagnostic-errors-${EnvironmentName}'
+      AlarmDescription: 'DE Agent diagnostic function errors'
+      MetricName: Errors
+      Namespace: AWS/Lambda
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 5
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref DiagnosticFunction
+      TreatMissingData: notBreaching
+
+  DiagnosticDurationAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'de-agent-diagnostic-duration-${EnvironmentName}'
+      AlarmDescription: 'DE Agent diagnostic function taking too long'
+      MetricName: Duration
+      Namespace: AWS/Lambda
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 60000  # 60 seconds
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref DiagnosticFunction
+      TreatMissingData: notBreaching
+
+Outputs:
+  ApiEndpoint:
+    Description: API Gateway endpoint URL for Slack events
+    Value: !Sub 'https://${DEAgentApi}.execute-api.${AWS::Region}.amazonaws.com/${EnvironmentName}/slack/events'
+  
+  SlackListenerFunctionArn:
+    Description: ARN of the Slack listener Lambda function
+    Value: !GetAtt SlackListenerFunction.Arn
+  
+  DiagnosticFunctionArn:
+    Description: ARN of the diagnostic Lambda function
+    Value: !GetAtt DiagnosticFunction.Arn
+  
+  DLQUrl:
+    Description: URL of the Dead Letter Queue
+    Value: !Ref DiagnosticDLQ
