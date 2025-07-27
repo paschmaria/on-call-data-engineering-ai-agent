@@ -155,7 +155,7 @@ log_content[:2000]  # Increase limit in code
 **Symptoms:** Function times out after 300 seconds
 
 **Solutions:**
-1. Increase timeout in SAM template
+1. Increase the Lambda timeout in your Terraform configuration (or other IaC template)
 2. Add parallel processing:
    ```python
    import concurrent.futures
