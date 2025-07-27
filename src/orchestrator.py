@@ -17,7 +17,7 @@ from .tools import (
     get_mwaa_task_logs, query_redshift_audit_logs, get_cloudwatch_lambda_errors,
     get_redshift_recent_errors, check_mwaa_dag_state
 )
-from .runtime_prompt import build_diagnostic_prompt
+from .prompt_engine import build_diagnostic_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -285,11 +285,8 @@ class DiagnosticOrchestrator:
                 dag_state=context.dag_state
             )
             
-            # This would call your LLM client (e.g., Gemini)
-            # For now, returning a placeholder
             logger.info("Generated diagnostic prompt, calling LLM...")
-            
-            # TODO: Replace with actual LLM call
+
             analysis = await self._call_llm(prompt)
             
             return analysis
@@ -301,11 +298,29 @@ class DiagnosticOrchestrator:
     async def _call_llm(self, prompt: str) -> str:
         """
         Call the LLM API for analysis generation.
-        
-        This is a placeholder - implement with your LLM client.
         """
-        # Placeholder implementation
-        return f"Analysis for failure: {prompt[:100]}..."
+        import os
+        import google.generativeai as genai
+
+        def _invoke() -> str:
+            genai.configure(api_key=os.environ.get("GEMINI_API_KEY", ""))
+            model = genai.GenerativeModel("gemini-pro")
+            response = model.generate_content(
+                prompt,
+                generation_config={
+                    "temperature": 0.7,
+                    "top_p": 0.9,
+                    "top_k": 40,
+                    "max_output_tokens": 2000,
+                },
+                safety_settings=[
+                    {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"}
+                ],
+            )
+            return response.text
+
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, _invoke)
     
     def _calculate_confidence_score(self, context: DiagnosticContext) -> float:
         """

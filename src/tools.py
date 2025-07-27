@@ -21,11 +21,104 @@ from botocore.exceptions import ClientError
 # Configure logging
 logger = logging.getLogger(__name__)
 
-# Initialize AWS clients
-mwaa_client = boto3.client('mwaa')
-redshift_data_client = boto3.client('redshift-data')
-logs_client = boto3.client('logs')
-secrets_client = boto3.client('secretsmanager')
+# AWS clients are created lazily inside each function to make mocking easier
+
+
+def get_secrets_manager_value(secret_id: str) -> Optional[Dict[str, Any]]:
+    """Retrieve a secret value from AWS Secrets Manager."""
+    try:
+        client = boto3.client('secretsmanager')
+        response = client.get_secret_value(SecretId=secret_id)
+        return json.loads(response.get('SecretString', '{}'))
+    except Exception as e:
+        logger.error(f"Failed to retrieve secret {secret_id}: {e}")
+        return None
+
+
+def check_mwaa_dag_state(dag_id: str) -> Optional[Dict[str, Any]]:
+    """Return basic MWAA environment information for a DAG."""
+    if not dag_id:
+        return None
+    try:
+        client = boto3.client('mwaa')
+        resp = client.get_environment(Name=dag_id)
+        env = resp['Environment']
+        return {
+            'environment_name': env.get('Name'),
+            'environment_status': env.get('Status'),
+            'webserver_url': env.get('WebserverUrl'),
+        }
+    except Exception as e:
+        logger.error(f"Failed to get MWAA environment {dag_id}: {e}")
+        return None
+
+
+def get_redshift_recent_errors(time_window_hours: int = 24) -> List[Dict[str, Any]]:
+    """Query recent errors from Redshift."""
+    try:
+        secrets = secrets_client.get_secret_value(SecretId='de-agent/redshift')
+        config = json.loads(secrets['SecretString'])
+
+        query = f"""
+        SELECT
+            error_message,
+            starttime AS timestamp,
+            query_text
+        FROM stl_query_errors
+        WHERE starttime > DATEADD(hour, -{time_window_hours}, GETDATE())
+        ORDER BY starttime DESC
+        LIMIT 20;
+        """
+
+        redshift_data_client = boto3.client('redshift-data')
+        response = redshift_data_client.execute_statement(
+            ClusterIdentifier=config['cluster_id'],
+            Database=config['database'],
+            SecretArn=config['secret_arn'],
+            Sql=query,
+        )
+
+        statement_id = response['Id']
+        result = redshift_data_client.get_statement_result(Id=statement_id)
+
+        columns = [c.get('name') or c.get('label') for c in result['ColumnMetadata']]
+        records = []
+        for row in result.get('Records', []):
+            record = {}
+            for i, col in enumerate(columns):
+                record[col] = list(row[i].values())[0] if row[i] else None
+            records.append(record)
+        return records
+    except Exception as e:
+        logger.error(f"Failed to query recent Redshift errors: {e}")
+        return []
+
+
+def format_slack_response(analysis: str, dag_id: str, confidence: Optional[str] = None) -> str:
+    """Convert markdown LLM output to a Slack-friendly message."""
+    if not analysis:
+        return ""
+
+    lines = []
+    for line in analysis.splitlines():
+        if line.startswith('## '):
+            heading = line[3:].strip()
+            emoji = '🔍 ' if 'root cause' in heading.lower() else ''
+            lines.append(f"{emoji}*{heading}*")
+        elif line.startswith('- '):
+            lines.append(f"• {line[2:]}")
+        else:
+            lines.append(line)
+
+    header_parts = [f"DAG: `{dag_id}`"]
+    if confidence:
+        header_parts.append(f"Confidence: {confidence}")
+    header = ' | '.join(header_parts)
+    result = f"{header}\n\n" + "\n".join(lines)
+
+    if len(result) > 3900:
+        result = result[:3900] + "\n...[truncated]"
+    return result
 
 
 class DiagnosticError(Exception):
@@ -56,6 +149,7 @@ def get_mwaa_task_logs(log_url: str) -> str:
         env_name = parsed_url.hostname.split('.')[0]
         
         # Get MWAA environment details for authentication
+        mwaa_client = boto3.client('mwaa')
         response = mwaa_client.get_environment(Name=env_name)
         
         if response['Environment']['Status'] != 'AVAILABLE':
@@ -136,6 +230,7 @@ def get_dag_run_status(dag_id: str, execution_date: str) -> Dict[str, Any]:
             raise DiagnosticError("MWAA_ENVIRONMENT_NAME not configured")
         
         # Create CLI token for API access
+        mwaa_client = boto3.client('mwaa')
         token_response = mwaa_client.create_cli_token(Name=env_name)
         
         # Prepare Airflow CLI command
@@ -257,6 +352,7 @@ def query_redshift_audit_logs(
             parameters = []
         
         # Execute query
+        redshift_data_client = boto3.client('redshift-data')
         response = redshift_data_client.execute_statement(
             ClusterIdentifier=config['cluster_id'],
             Database=config['database'],
@@ -335,6 +431,7 @@ def get_cloudwatch_lambda_errors(
         | limit 20
         """
         
+        logs_client = boto3.client('logs')
         response = logs_client.start_query(
             logGroupName=log_group,
             startTime=int(start_time.timestamp()),
