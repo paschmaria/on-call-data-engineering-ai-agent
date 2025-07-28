@@ -112,6 +112,7 @@ The agent requires the following environment variables (managed through Terrafor
 - `REDSHIFT_CLUSTER_ID`: Your Redshift cluster identifier
 - `REDSHIFT_DATABASE`: Database name for audit logs
 - `MWAA_ENVIRONMENT_NAME`: MWAA environment name
+- `DIAGNOSTIC_LAMBDA_NAME`: Name of the diagnostic Lambda (set by Terraform)
 
 ## 🧪 Testing
 
