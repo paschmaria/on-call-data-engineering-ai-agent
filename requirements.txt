@@ -8,7 +8,7 @@ slack-sdk==3.26.2
 
 # HTTP client for MWAA log fetching
 requests==2.31.0
-urllib3==2.1.0
+urllib3==2.0.7
 
 # Google Gemini for LLM
 google-generativeai==0.3.2

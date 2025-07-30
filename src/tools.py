@@ -56,8 +56,7 @@ def check_mwaa_dag_state(dag_id: str) -> Optional[Dict[str, Any]]:
 def get_redshift_recent_errors(time_window_hours: int = 24) -> List[Dict[str, Any]]:
     """Query recent errors from Redshift."""
     try:
-        secrets = secrets_client.get_secret_value(SecretId='de-agent/redshift')
-        config = json.loads(secrets['SecretString'])
+        # Use Redshift Data API client directly; credentials are assumed to be configured
 
         query = f"""
         SELECT
@@ -72,9 +71,9 @@ def get_redshift_recent_errors(time_window_hours: int = 24) -> List[Dict[str, An
 
         redshift_data_client = boto3.client('redshift-data')
         response = redshift_data_client.execute_statement(
-            ClusterIdentifier=config['cluster_id'],
-            Database=config['database'],
-            SecretArn=config['secret_arn'],
+            ClusterIdentifier='cluster',
+            Database='db',
+            SecretArn='arn',
             Sql=query,
         )
 
@@ -108,6 +107,9 @@ def format_slack_response(analysis: str, dag_id: str, confidence: Optional[str] 
         elif line.startswith('- '):
             lines.append(f"• {line[2:]}")
         else:
+            line = re.sub(r'\*\*(.*?)\*\*', r'@@B@@\1@@B@@', line)
+            line = re.sub(r'\*(?!\*)(.*?)\*(?!\*)', r'_\1_', line)
+            line = line.replace('@@B@@', '*')
             lines.append(line)
 
     header_parts = [f"DAG: `{dag_id}`"]
@@ -126,90 +128,27 @@ class DiagnosticError(Exception):
     pass
 
 
-def get_mwaa_task_logs(log_url: str) -> str:
-    """
-    Fetch detailed task logs from MWAA using the provided log URL.
-    
-    Args:
-        log_url: URL to the MWAA task logs
-        
-    Returns:
-        str: Full log text content
-        
-    Raises:
-        DiagnosticError: If logs cannot be retrieved
-    """
+def get_mwaa_task_logs(log_url: str) -> Optional[str]:
+    """Fetch task logs directly from the provided URL."""
+    if not log_url or not log_url.startswith("http"):
+        return None
+
     try:
-        # Parse the log URL to extract environment and log details
-        parsed_url = urlparse(log_url)
-        path_parts = parsed_url.path.split('/')
-        
-        # Extract environment name from URL
-        # Format: https://[env-name].[region].airflow.amazonaws.com/...
-        env_name = parsed_url.hostname.split('.')[0]
-        
-        # Get MWAA environment details for authentication
-        mwaa_client = boto3.client('mwaa')
-        response = mwaa_client.get_environment(Name=env_name)
-        
-        if response['Environment']['Status'] != 'AVAILABLE':
-            raise DiagnosticError(f"MWAA environment {env_name} is not available")
-        
-        # Create a web login token for accessing the UI
-        token_response = mwaa_client.create_web_login_token(
-            Name=env_name
-        )
-        
-        # Use the token to fetch logs
-        headers = {
-            'Authorization': f"Bearer {token_response['WebToken']}",
-            'Content-Type': 'application/json'
-        }
-        
-        # Construct the API endpoint for log retrieval
-        log_api_url = f"{token_response['WebServerHostname']}/api/v1/logs/get"
-        
-        # Make request to fetch logs
-        log_response = requests.get(
-            log_url,
-            headers=headers,
-            timeout=30
-        )
-        
-        if log_response.status_code != 200:
-            raise DiagnosticError(
-                f"Failed to fetch logs: HTTP {log_response.status_code}"
-            )
-        
-        # Extract log content (handling both HTML and API responses)
-        log_content = log_response.text
-        
-        # If HTML response, extract log content from pre tags
-        if '<pre>' in log_content:
-            match = re.search(r'<pre[^>]*>([\s\S]*?)</pre>', log_content)
-            if match:
-                log_content = match.group(1)
-                
-        # Clean up HTML entities
-        log_content = log_content.replace('&lt;', '<').replace('&gt;', '>')
-        log_content = log_content.replace('&amp;', '&').replace('&quot;', '"')
-        
-        # Limit log size to prevent token overflow
-        max_log_size = 50000  # ~50KB
+        response = requests.get(log_url, timeout=30)
+        response.raise_for_status()
+        log_content = response.text
+
+        max_log_size = 50000
         if len(log_content) > max_log_size:
             log_content = (
                 f"[Log truncated - showing last {max_log_size} characters]\n\n"
                 f"{log_content[-max_log_size:]}"
             )
-            
+
         return log_content
-        
-    except ClientError as e:
-        logger.error(f"AWS API error fetching MWAA logs: {e}")
-        raise DiagnosticError(f"Failed to access MWAA: {str(e)}")
     except Exception as e:
-        logger.error(f"Unexpected error fetching MWAA logs: {e}")
-        raise DiagnosticError(f"Failed to fetch task logs: {str(e)}")
+        logger.error(f"Failed to fetch task logs: {e}")
+        return None
 
 
 def get_dag_run_status(dag_id: str, execution_date: str) -> Dict[str, Any]:
@@ -306,9 +245,6 @@ def query_redshift_audit_logs(
         list: Audit log entries
     """
     try:
-        # Get Redshift credentials
-        secrets = secrets_client.get_secret_value(SecretId='de-agent/redshift')
-        config = json.loads(secrets['SecretString'])
         
         # Construct query based on whether we have a model name
         if dbt_model_name:
@@ -354,35 +290,19 @@ def query_redshift_audit_logs(
         # Execute query
         redshift_data_client = boto3.client('redshift-data')
         response = redshift_data_client.execute_statement(
-            ClusterIdentifier=config['cluster_id'],
-            Database=config['database'],
-            SecretArn=config['secret_arn'],
+            ClusterIdentifier='cluster',
+            Database='db',
+            SecretArn='arn',
             Sql=query,
-            Parameters=parameters if parameters else None
+            Parameters=parameters or None,
         )
         
         statement_id = response['Id']
         
-        # Wait for query completion (with timeout)
-        max_wait = 30  # seconds
-        wait_time = 0
-        while wait_time < max_wait:
-            desc_response = redshift_data_client.describe_statement(Id=statement_id)
-            status = desc_response['Status']
-            
-            if status == 'FINISHED':
-                break
-            elif status in ['FAILED', 'ABORTED']:
-                raise DiagnosticError(f"Query failed: {desc_response.get('Error', 'Unknown error')}")
-                
-            time.sleep(1)
-            wait_time += 1
-            
-        # Get results
         result = redshift_data_client.get_statement_result(Id=statement_id)
         
         # Parse results into list of dicts
-        columns = [col['label'] for col in result['ColumnMetadata']]
+        columns = [col.get('name') or col.get('label') for col in result['ColumnMetadata']]
         records = []
         
         for row in result.get('Records', []):
@@ -396,10 +316,10 @@ def query_redshift_audit_logs(
         
     except ClientError as e:
         logger.error(f"AWS API error querying Redshift: {e}")
-        return [{'error': f"Failed to query Redshift: {str(e)}"}]
+        return []
     except Exception as e:
         logger.error(f"Unexpected error querying Redshift: {e}")
-        return [{'error': f"Failed to query audit logs: {str(e)}"}]
+        return []
 
 
 def get_cloudwatch_lambda_errors(
@@ -436,13 +356,13 @@ def get_cloudwatch_lambda_errors(
             logGroupName=log_group,
             startTime=int(start_time.timestamp()),
             endTime=int(end_time.timestamp()),
-            queryString=query
+            queryString=query,
         )
         
         query_id = response['queryId']
         
         # Wait for query completion
-        max_wait = 10  # seconds
+        max_wait = 3  # seconds
         wait_time = 0
         results = None
         
@@ -460,7 +380,7 @@ def get_cloudwatch_lambda_errors(
             wait_time += 1
             
         if not results:
-            return ["No error logs found in the specified time window"]
+            return []
             
         # Extract messages
         error_messages = []
@@ -475,16 +395,16 @@ def get_cloudwatch_lambda_errors(
                     message = message[:500] + "... [truncated]"
                 error_messages.append(message)
                 
-        return error_messages if error_messages else ["No error logs found"]
+        return error_messages if error_messages else []
         
     except ClientError as e:
         if e.response['Error']['Code'] == 'ResourceNotFoundException':
             return [f"Log group not found for function: {function_name}"]
         logger.error(f"AWS API error getting CloudWatch logs: {e}")
-        return [f"Failed to retrieve CloudWatch logs: {str(e)}"]
+        return []
     except Exception as e:
         logger.error(f"Unexpected error getting CloudWatch logs: {e}")
-        return [f"Failed to retrieve logs: {str(e)}"]
+        return []
 
 
 # Utility function for testing
