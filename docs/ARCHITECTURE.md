@@ -30,7 +30,7 @@ graph TB
     
     subgraph "AI Analysis"
         E --> J[Context Assembler]
-        J --> K[LLM Client<br/>(Gemini)]
+        J --> K["LLM Client<br/>(Gemini)"]
         K --> L[Response Formatter]
         L --> H
     end

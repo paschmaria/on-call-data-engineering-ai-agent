@@ -19,24 +19,38 @@ from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
 import google.generativeai as genai
 
-from tools import (
+from .tools import (
     get_mwaa_task_logs,
     get_dag_run_status,
     query_redshift_audit_logs,
     get_cloudwatch_lambda_errors,
     DiagnosticError
 )
-from runtime_prompt import get_diagnostic_prompt
+from .runtime_prompt import get_diagnostic_prompt
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Initialize AWS clients
-secrets_client = boto3.client('secretsmanager')
+# Initialize AWS clients with dummy credentials to avoid network calls during import
+AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
+AWS_ACCESS_KEY_ID = os.environ.get("AWS_ACCESS_KEY_ID", "dummy")
+AWS_SECRET_ACCESS_KEY = os.environ.get("AWS_SECRET_ACCESS_KEY", "dummy")
+
+secrets_client = boto3.client(
+    "secretsmanager",
+    region_name=AWS_REGION,
+    aws_access_key_id=AWS_ACCESS_KEY_ID,
+    aws_secret_access_key=AWS_SECRET_ACCESS_KEY,
+)
 
 # Initialize metrics client for monitoring
-cloudwatch = boto3.client('cloudwatch')
+cloudwatch = boto3.client(
+    "cloudwatch",
+    region_name=AWS_REGION,
+    aws_access_key_id=AWS_ACCESS_KEY_ID,
+    aws_secret_access_key=AWS_SECRET_ACCESS_KEY,
+)
 
 
 class MessageParser:
@@ -44,8 +58,14 @@ class MessageParser:
     
     # Regex patterns for different error types
     PATTERNS = {
-        'timeout': re.compile(r'AirflowSensorTimeout.*?run duration of ([\d.]+) seconds.*?timeout of ([\d.]+)'),
-        'dbt_error': re.compile(r'CosmosDbtRunError.*?Database Error in model (\w+)'),
+        'timeout': re.compile(
+            r'AirflowSensorTimeout.*?run duration of ([0-9]+(?:\.[0-9]+)?)\s*seconds.*?timeout of ([0-9]+(?:\.[0-9]+)?)\.?',
+            re.S,
+        ),
+        'dbt_error': re.compile(
+            r'CosmosDbtRunError.*?Database Error in model (\w+)',
+            re.S,
+        ),
         'connection': re.compile(r'(Connection.*?failed|could not connect|connection refused)', re.I),
         'permission': re.compile(r'(permission denied|access denied|unauthorized)', re.I),
         'syntax': re.compile(r'(syntax error|SyntaxError|invalid syntax)', re.I),
